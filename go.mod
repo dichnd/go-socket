@@ -1,4 +1,4 @@
-module dichnd/go-socket
+module github.com/dichnd/go-socket
 
 go 1.14
 

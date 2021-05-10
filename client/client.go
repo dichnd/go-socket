@@ -1,10 +1,10 @@
 package client
 
 import (
-	"dichnd/go-socket/server"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dichnd/go-socket/server"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
