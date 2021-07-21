@@ -12,16 +12,18 @@ import (
 	"time"
 )
 
+const MaxMessageQueueSize = 1000
+
 type IWsClient interface {
 	SendMessage(message server.Message) error
-	OnMessage(f func(message server.Message))
+	ReadMessage() server.Message
 }
 
 type WsClient struct {
 	Url *url.URL
 	Header http.Header
 	conn *websocket.Conn
-	onMessage func(message server.Message)
+	messageChannel      chan server.Message
 	mu sync.Mutex
 	isReading bool
 }
@@ -32,6 +34,7 @@ func NewWsClient(url *url.URL, header http.Header) *WsClient {
 		Header: header,
 		mu: sync.Mutex{},
 		isReading: false,
+		messageChannel: make(chan server.Message, MaxMessageQueueSize),
 	}
 }
 
@@ -65,44 +68,64 @@ func (c *WsClient) SendMessage(message server.Message) error {
 	return nil
 }
 
-func (c *WsClient) OnMessage(f func(message server.Message)) {
-	c.onMessage = f
+func (c *WsClient) ReadMessage() (server.Message, error) {
+	msg, ok := <-c.messageChannel
+	if !ok {
+		return server.Message{}, errors.New("socket closed")
+	}
+	return msg, nil
 }
 
 func (c *WsClient) read() {
 	c.isReading = true
 	for c.conn != nil {
 		messageType, message, err := c.conn.ReadMessage()
-		if err != nil && messageType == -1 {
-			fmt.Println("socket error, will retry: ", err)
-			c.retryConnection()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				close(c.messageChannel)
+				break
+			}
+			if messageType == -1 {
+				fmt.Println("socket error, will retry: ", err)
+				c.retryConnection()
+			}
 		}
 
 		if messageType == websocket.PingMessage {
 			_ = c.conn.WriteMessage(websocket.PongMessage, nil)
 		} else if messageType != -1 {
 			var msg server.Message
-			_ = json.Unmarshal(message, &msg)
-			if c.onMessage != nil {
-				c.onMessage(msg)
+			err := json.Unmarshal(message, &msg)
+
+			if err != nil {
+				msg = server.Message{
+					Data: string(message),
+				}
 			}
+
+			if len(c.messageChannel) == MaxMessageQueueSize {
+				<-c.messageChannel
+			}
+			c.messageChannel <- msg
 		}
 	}
 }
 
 func (c *WsClient) retryConnection()  {
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial(c.Url.String(), c.Header);
+		conn, _, err := websocket.DefaultDialer.Dial(c.Url.String(), c.Header)
 		if err == nil && conn != nil {
 			c.conn = conn
 			if !c.isReading {
 				go c.read()
 			}
+
 			return
 		}
 		if err != nil {
 			fmt.Println(err)
 		}
+
 		time.Sleep(5 * time.Second)
 	}
 }
