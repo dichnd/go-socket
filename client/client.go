@@ -46,6 +46,7 @@ func (c *WsClient) Connect() error {
 
 func (c *WsClient) Close() error {
 	if c.conn != nil {
+		c.isReading = false
 		return c.conn.Close()
 	}
 	return nil
@@ -86,7 +87,7 @@ func (c *WsClient) ReadMessage() (server.Message, error) {
 
 func (c *WsClient) read() {
 	c.isReading = true
-	for c.conn != nil {
+	for c.conn != nil && c.isReading {
 		messageType, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
