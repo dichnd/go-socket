@@ -16,7 +16,8 @@ const MaxMessageQueueSize = 1000
 
 type IWsClient interface {
 	SendMessage(message server.Message) error
-	ReadMessage() server.Message
+	ReadMessage() (server.Message, error)
+	Close() error
 }
 
 type WsClient struct {
@@ -40,6 +41,13 @@ func NewWsClient(url *url.URL, header http.Header) *WsClient {
 
 func (c *WsClient) Connect() error {
 	go c.retryConnection()
+	return nil
+}
+
+func (c *WsClient) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
 	return nil
 }
 
