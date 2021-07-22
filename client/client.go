@@ -27,6 +27,7 @@ type WsClient struct {
 	messageChannel      chan server.Message
 	mu sync.Mutex
 	isReading bool
+	isClosed bool
 }
 
 func NewWsClient(url *url.URL, header http.Header) *WsClient {
@@ -35,6 +36,7 @@ func NewWsClient(url *url.URL, header http.Header) *WsClient {
 		Header: header,
 		mu: sync.Mutex{},
 		isReading: false,
+		isClosed: false,
 		messageChannel: make(chan server.Message, MaxMessageQueueSize),
 	}
 }
@@ -46,7 +48,7 @@ func (c *WsClient) Connect() error {
 
 func (c *WsClient) Close() error {
 	if c.conn != nil {
-		c.isReading = false
+		c.isClosed = true
 		return c.conn.Close()
 	}
 	return nil
@@ -87,7 +89,7 @@ func (c *WsClient) ReadMessage() (server.Message, error) {
 
 func (c *WsClient) read() {
 	c.isReading = true
-	for c.conn != nil && c.isReading {
+	for c.conn != nil && !c.isClosed {
 		messageType, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
@@ -121,7 +123,7 @@ func (c *WsClient) read() {
 }
 
 func (c *WsClient) retryConnection()  {
-	for {
+	for !c.isClosed {
 		conn, _, err := websocket.DefaultDialer.Dial(c.Url.String(), c.Header)
 		if err == nil && conn != nil {
 			c.conn = conn
