@@ -134,7 +134,7 @@ func (c *WsClient) retryConnection()  {
 			return
 		}
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println(err, c.Url.String())
 		}
 
 		time.Sleep(5 * time.Second)
