@@ -1,4 +1,4 @@
-module github.com/dichnd/go-socket
+module github.com/donaldtrieuit/go-socket
 
 go 1.14
 
