@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dichnd/go-socket/server"
+	"github.com/donaldtrieuit/go-socket/server"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
