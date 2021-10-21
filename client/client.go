@@ -21,22 +21,26 @@ type IWsClient interface {
 }
 
 type WsClient struct {
-	Url *url.URL
-	Header http.Header
-	conn *websocket.Conn
-	messageChannel      chan server.Message
-	mu sync.Mutex
-	isReading bool
-	isClosed bool
+	Url            *url.URL
+	Header         http.Header
+	conn           *websocket.Conn
+	messageChannel chan server.Message
+	mu             sync.Mutex
+	destructor     sync.Once // shutdown once
+	errors         []chan *error
+	noNotify       bool
+	isReading      bool
+	isClosed       bool
 }
 
 func NewWsClient(url *url.URL, header http.Header) *WsClient {
 	return &WsClient{
-		Url: url,
-		Header: header,
-		mu: sync.Mutex{},
-		isReading: false,
-		isClosed: false,
+		Url:            url,
+		Header:         header,
+		mu:             sync.Mutex{},
+		isReading:      false,
+		isClosed:       false,
+		noNotify:       false,
 		messageChannel: make(chan server.Message, MaxMessageQueueSize),
 	}
 }
@@ -51,12 +55,26 @@ func (c *WsClient) Close() error {
 		c.isClosed = true
 		return c.conn.Close()
 	}
+	defer c.shutdown(nil)
 	return nil
+}
+
+func (c *WsClient) NotifyClose(receiver chan *error) chan *error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.noNotify {
+		close(receiver)
+	} else {
+		c.errors = append(c.errors, receiver)
+	}
+	return receiver
 }
 
 func (c *WsClient) SendMessage(message server.Message) error {
 	if c.conn == nil {
-		return errors.New("websocket connection disconnected")
+		err := errors.New("websocket connection disconnected")
+		c.shutdown(&err)
+		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -82,7 +100,9 @@ func (c *WsClient) SendMessage(message server.Message) error {
 func (c *WsClient) ReadMessage() (server.Message, error) {
 	msg, ok := <-c.messageChannel
 	if !ok {
-		return server.Message{}, errors.New("socket closed")
+		err := errors.New("socket closed")
+		c.shutdown(&err)
+		return server.Message{}, err
 	}
 	return msg, nil
 }
@@ -93,6 +113,7 @@ func (c *WsClient) read() {
 		messageType, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				c.shutdown(&err)
 				close(c.messageChannel)
 				break
 			}
@@ -122,7 +143,7 @@ func (c *WsClient) read() {
 	}
 }
 
-func (c *WsClient) retryConnection()  {
+func (c *WsClient) retryConnection() {
 	for !c.isClosed {
 		conn, _, err := websocket.DefaultDialer.Dial(c.Url.String(), c.Header)
 		if err == nil && conn != nil {
@@ -134,11 +155,28 @@ func (c *WsClient) retryConnection()  {
 			return
 		}
 		if err != nil {
+			c.shutdown(&err)
 			fmt.Println(err, c.Url.String())
 		}
 
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func (c *WsClient) shutdown(err *error) {
+	c.destructor.Do(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err != nil {
+			for _, c := range c.errors {
+				c <- err
+			}
+		}
+		for _, c := range c.errors {
+			close(c)
+		}
+		c.noNotify = true
+	})
 }
 
 func (*WsClient) BindKey() string {
