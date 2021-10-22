@@ -116,15 +116,14 @@ func (c *WsClient) read() {
 	for c.conn != nil && !c.isClosed {
 		messageType, message, err := c.conn.ReadMessage()
 		if err != nil {
+			c.shutdown(&err)
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				c.shutdown(&err)
 				close(c.messageChannel)
 				break
 			}
 			if messageType == -1 {
 				fmt.Println("socket error, will retry: ", err)
 				c.retryConnection()
-				return
 			}
 		}
 
