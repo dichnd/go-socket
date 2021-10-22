@@ -50,6 +50,10 @@ func (c *WsClient) Connect() error {
 	return nil
 }
 
+func (c *WsClient) GetConnection() *websocket.Conn {
+	return c.conn
+}
+
 func (c *WsClient) Close() error {
 	if c.conn != nil {
 		c.isClosed = true
