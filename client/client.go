@@ -124,6 +124,7 @@ func (c *WsClient) read() {
 			if messageType == -1 {
 				fmt.Println("socket error, will retry: ", err)
 				c.retryConnection()
+				return
 			}
 		}
 
