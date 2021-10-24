@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/donaldtrieuit/go-socket/server"
 	"github.com/gorilla/websocket"
+	"log"
 	"net/http"
 	"net/url"
 	"sync"
@@ -26,11 +27,9 @@ type WsClient struct {
 	conn           *websocket.Conn
 	messageChannel chan server.Message
 	mu             sync.Mutex
-	destructor     sync.Once // shutdown once
-	errors         []chan *error
-	noNotify       bool
 	isReading      bool
 	isClosed       bool
+	connected      chan *bool
 }
 
 func NewWsClient(url *url.URL, header http.Header) *WsClient {
@@ -40,7 +39,7 @@ func NewWsClient(url *url.URL, header http.Header) *WsClient {
 		mu:             sync.Mutex{},
 		isReading:      false,
 		isClosed:       false,
-		noNotify:       false,
+		connected:      make(chan *bool),
 		messageChannel: make(chan server.Message, MaxMessageQueueSize),
 	}
 }
@@ -50,35 +49,29 @@ func (c *WsClient) Connect() error {
 	return nil
 }
 
-func (c *WsClient) GetConnection() *websocket.Conn {
-	return c.conn
-}
-
 func (c *WsClient) Close() error {
 	if c.conn != nil {
 		c.isClosed = true
+		close(c.connected)
 		return c.conn.Close()
 	}
-	defer c.shutdown(nil)
 	return nil
 }
 
-func (c *WsClient) NotifyClose(receiver chan *error) chan *error {
+func (c *WsClient) NotifyStatusConnection(receiver chan *bool) chan *bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.noNotify {
+	if c.isClosed {
 		close(receiver)
 	} else {
-		c.errors = append(c.errors, receiver)
+		c.connected = receiver
 	}
 	return receiver
 }
 
 func (c *WsClient) SendMessage(message server.Message) error {
 	if c.conn == nil {
-		err := errors.New("websocket connection disconnected")
-		c.shutdown(&err)
-		return err
+		return errors.New("websocket connection disconnected")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -104,9 +97,7 @@ func (c *WsClient) SendMessage(message server.Message) error {
 func (c *WsClient) ReadMessage() (server.Message, error) {
 	msg, ok := <-c.messageChannel
 	if !ok {
-		err := errors.New("socket closed")
-		c.shutdown(&err)
-		return server.Message{}, err
+		return server.Message{}, errors.New("socket closed")
 	}
 	return msg, nil
 }
@@ -116,7 +107,6 @@ func (c *WsClient) read() {
 	for c.conn != nil && !c.isClosed {
 		messageType, message, err := c.conn.ReadMessage()
 		if err != nil {
-			c.shutdown(&err)
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				close(c.messageChannel)
 				break
@@ -132,7 +122,6 @@ func (c *WsClient) read() {
 		} else if messageType != -1 {
 			var msg server.Message
 			err := json.Unmarshal(message, &msg)
-
 			if err != nil {
 				msg = server.Message{
 					Data: string(message),
@@ -149,38 +138,31 @@ func (c *WsClient) read() {
 
 func (c *WsClient) retryConnection() {
 	for !c.isClosed {
+		status := false
 		conn, _, err := websocket.DefaultDialer.Dial(c.Url.String(), c.Header)
 		if err == nil && conn != nil {
 			c.conn = conn
+			go func() {
+				log.Print("connected")
+				status = true
+				c.connected <- &status
+			}()
 			if !c.isReading {
 				go c.read()
 			}
-
 			return
 		}
 		if err != nil {
-			c.shutdown(&err)
+			go func() {
+				log.Print("disconnected")
+				status = false
+				c.connected <- &status
+			}()
 			fmt.Println(err, c.Url.String())
 		}
 
 		time.Sleep(5 * time.Second)
 	}
-}
-
-func (c *WsClient) shutdown(err *error) {
-	c.destructor.Do(func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if err != nil {
-			for _, c := range c.errors {
-				c <- err
-			}
-		}
-		for _, c := range c.errors {
-			close(c)
-		}
-		c.noNotify = true
-	})
 }
 
 func (*WsClient) BindKey() string {
