@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dichnd/go-socket/server"
+	"github.com/donaldtrieuit/go-socket/server"
 	"github.com/gorilla/websocket"
+	"log"
 	"net/http"
 	"net/url"
 	"sync"
@@ -21,22 +22,24 @@ type IWsClient interface {
 }
 
 type WsClient struct {
-	Url *url.URL
-	Header http.Header
-	conn *websocket.Conn
-	messageChannel      chan server.Message
-	mu sync.Mutex
-	isReading bool
-	isClosed bool
+	Url            *url.URL
+	Header         http.Header
+	conn           *websocket.Conn
+	messageChannel chan server.Message
+	mu             sync.Mutex
+	isReading      bool
+	isClosed       bool
+	connected      chan *bool
 }
 
 func NewWsClient(url *url.URL, header http.Header) *WsClient {
 	return &WsClient{
-		Url: url,
-		Header: header,
-		mu: sync.Mutex{},
-		isReading: false,
-		isClosed: false,
+		Url:            url,
+		Header:         header,
+		mu:             sync.Mutex{},
+		isReading:      false,
+		isClosed:       false,
+		connected:      make(chan *bool),
 		messageChannel: make(chan server.Message, MaxMessageQueueSize),
 	}
 }
@@ -49,9 +52,21 @@ func (c *WsClient) Connect() error {
 func (c *WsClient) Close() error {
 	if c.conn != nil {
 		c.isClosed = true
+		close(c.connected)
 		return c.conn.Close()
 	}
 	return nil
+}
+
+func (c *WsClient) NotifyStatusConnection(receiver chan *bool) chan *bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.isClosed {
+		close(receiver)
+	} else {
+		c.connected = receiver
+	}
+	return receiver
 }
 
 func (c *WsClient) SendMessage(message server.Message) error {
@@ -107,7 +122,6 @@ func (c *WsClient) read() {
 		} else if messageType != -1 {
 			var msg server.Message
 			err := json.Unmarshal(message, &msg)
-
 			if err != nil {
 				msg = server.Message{
 					Data: string(message),
@@ -122,18 +136,28 @@ func (c *WsClient) read() {
 	}
 }
 
-func (c *WsClient) retryConnection()  {
+func (c *WsClient) retryConnection() {
 	for !c.isClosed {
+		status := false
 		conn, _, err := websocket.DefaultDialer.Dial(c.Url.String(), c.Header)
 		if err == nil && conn != nil {
 			c.conn = conn
+			go func() {
+				log.Print("connected")
+				status = true
+				c.connected <- &status
+			}()
 			if !c.isReading {
 				go c.read()
 			}
-
 			return
 		}
 		if err != nil {
+			go func() {
+				log.Print("disconnected")
+				status = false
+				c.connected <- &status
+			}()
 			fmt.Println(err, c.Url.String())
 		}
 
